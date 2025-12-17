@@ -7,6 +7,7 @@ import PseudoCode from './components/PseudoCode';
 import CodeExamples from './components/CodeExamples';
 import Complexity from './components/Complexity';
 import PracticeMode from './components/PracticeMode';
+import Quiz from './components/Quiz';
 import { LayoutGrid, Home as HomeIcon } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -18,6 +19,8 @@ const App: React.FC = () => {
         return <Visualizer />;
       case 'practice':
         return <PracticeMode />;
+      case 'quiz':
+        return <Quiz />;
       case 'pseudocode':
         return <PseudoCode />;
       case 'code':
@@ -33,6 +36,7 @@ const App: React.FC = () => {
     switch(view) {
       case 'visualizer': return 'Simülasyon';
       case 'practice': return 'Kendini Dene';
+      case 'quiz': return 'Bilgi Sınavı';
       case 'pseudocode': return 'Sözde Kod';
       case 'code': return 'Kod Örnekleri';
       case 'complexity': return 'Analiz';

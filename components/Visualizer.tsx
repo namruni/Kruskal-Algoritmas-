@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import * as d3 from 'd3';
-import { Edge, Node, GraphData, LogStep } from '../types';
+import { Edge, Node, LogStep } from '../types';
 import { UnionFind } from '../utils/dsu';
-import { Play, RotateCcw, SkipForward, Plus } from 'lucide-react';
+import { Play, RotateCcw, SkipForward, SkipBack, Pause } from 'lucide-react';
 
 const WIDTH = 800;
 const HEIGHT = 500;
@@ -16,24 +16,27 @@ const Visualizer: React.FC = () => {
   const [logs, setLogs] = useState<LogStep[]>([]);
   const [mstWeight, setMstWeight] = useState<number>(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [complexity, setComplexity] = useState<'simple' | 'complex'>('complex');
   
   // Simulation ref to keep track of d3 simulation
   const simulationRef = useRef<d3.Simulation<d3.SimulationNodeDatum, undefined> | null>(null);
 
   // Generate a random connected graph
-  const generateGraph = useCallback(() => {
+  const generateGraph = useCallback((type: 'simple' | 'complex' = complexity) => {
     setIsPlaying(false);
     setCurrentStep(-1);
     setLogs([]);
     setMstWeight(0);
+    setComplexity(type);
 
-    // Increase number of nodes: 8 to 12
-    const numNodes = Math.floor(Math.random() * 5) + 8;
+    // Node count based on complexity
+    const numNodes = type === 'simple' 
+      ? Math.floor(Math.random() * 3) + 5  // 5-7 nodes
+      : Math.floor(Math.random() * 5) + 8; // 8-12 nodes
     
-    // Spread initial positions much wider
+    // Spread initial positions
     const newNodes: Node[] = Array.from({ length: numNodes }, (_, i) => ({
       id: String.fromCharCode(65 + i), // A, B, C...
-      // Use 80% of width/height for initial scatter
       x: WIDTH / 2 + (Math.random() - 0.5) * (WIDTH * 0.8),
       y: HEIGHT / 2 + (Math.random() - 0.5) * (HEIGHT * 0.8),
     }));
@@ -43,7 +46,7 @@ const Visualizer: React.FC = () => {
 
     // Create a spanning tree first to ensure connectivity
     for (let i = 0; i < numNodes - 1; i++) {
-      const weight = Math.floor(Math.random() * 15) + 1;
+      const weight = Math.floor(Math.random() * (type === 'simple' ? 10 : 15)) + 1;
       const source = newNodes[i].id;
       const target = newNodes[i + 1].id;
       possibleEdges.push({
@@ -57,12 +60,11 @@ const Visualizer: React.FC = () => {
       connectedPairs.add(`${target}-${source}`);
     }
 
-    // Add random extra edges for complexity
-    // Target roughly 1.6x edges per node to ensure good density
-    const targetEdgeCount = Math.floor(numNodes * 1.6); 
+    // Add random extra edges
+    const edgeMultiplier = type === 'simple' ? 1.3 : 1.6;
+    const targetEdgeCount = Math.floor(numNodes * edgeMultiplier); 
     let attempts = 0;
     
-    // Safety break after 200 attempts
     while (possibleEdges.length < targetEdgeCount && attempts < 200) {
       attempts++;
       const i = Math.floor(Math.random() * numNodes);
@@ -75,7 +77,7 @@ const Visualizer: React.FC = () => {
       const key = `${source}-${target}`;
       
       if (!connectedPairs.has(key)) {
-        const weight = Math.floor(Math.random() * 20) + 1;
+        const weight = Math.floor(Math.random() * (type === 'simple' ? 15 : 20)) + 1;
         possibleEdges.push({
           id: `e-${source}-${target}`,
           source,
@@ -98,52 +100,38 @@ const Visualizer: React.FC = () => {
     // Initialize D3 simulation
     if (simulationRef.current) simulationRef.current.stop();
 
-    // Create a copy of edges for D3 to use
     const simulationLinks = possibleEdges.map(e => ({ ...e }));
 
     simulationRef.current = d3.forceSimulation(newNodes as d3.SimulationNodeDatum[])
-      .force("link", d3.forceLink(simulationLinks).id((d: any) => d.id).distance(100))
-      // Stronger repulsion to spread nodes out
-      .force("charge", d3.forceManyBody().strength(-1000))
+      .force("link", d3.forceLink(simulationLinks).id((d: any) => d.id).distance(type === 'simple' ? 150 : 100))
+      .force("charge", d3.forceManyBody().strength(type === 'simple' ? -1500 : -1000))
       .force("center", d3.forceCenter(WIDTH / 2, HEIGHT / 2))
       .force("collide", d3.forceCollide(NODE_RADIUS + 25))
       .on("tick", () => {
-        // Constrain nodes to be within the SVG box so they don't fly off
         newNodes.forEach(node => {
             node.x = Math.max(NODE_RADIUS, Math.min(WIDTH - NODE_RADIUS, node.x));
             node.y = Math.max(NODE_RADIUS, Math.min(HEIGHT - NODE_RADIUS, node.y));
         });
-        setNodes([...newNodes]); // Trigger re-render on tick
+        setNodes([...newNodes]); 
       });
 
-  }, []);
+  }, [complexity]);
 
   // Initial load
   useEffect(() => {
-    generateGraph();
+    generateGraph('complex');
     return () => {
       if (simulationRef.current) simulationRef.current.stop();
     };
-  }, [generateGraph]);
+  }, []); // Run once on mount
 
-  // Step Logic
-  const nextStep = () => {
-    if (currentStep >= sortedEdges.length - 1) {
-      setIsPlaying(false);
-      return;
-    }
-
-    const nextIndex = currentStep + 1;
-    const edgeToProcess = sortedEdges[nextIndex];
-    
-    // Re-calculate state based on history up to this point to ensure correctness
+  // Helper to calculate visual state at any step
+  const updateVisualState = (targetStep: number) => {
     const dsu = new UnionFind(nodes.map(n => n.id));
     let currentMstWeight = 0;
-    
-    // Process all edges up to previous step to rebuild DSU state
     const newEdges: Edge[] = edges.map(e => ({ ...e, status: 'default' }));
     
-    for (let i = 0; i < nextIndex; i++) {
+    for (let i = 0; i <= targetStep; i++) {
       const e = sortedEdges[i];
       const mainEdgeIndex = newEdges.findIndex(ne => ne.id === e.id);
       
@@ -154,37 +142,57 @@ const Visualizer: React.FC = () => {
         if (mainEdgeIndex !== -1) newEdges[mainEdgeIndex].status = 'rejected';
       }
     }
+    
+    setEdges(newEdges);
+    setMstWeight(currentMstWeight);
+    setCurrentStep(targetStep);
+  };
 
-    // Now process the current edge
-    const mainEdgeIndex = newEdges.findIndex(ne => ne.id === edgeToProcess.id);
-    let log: LogStep;
+  const nextStep = () => {
+    if (currentStep >= sortedEdges.length - 1) {
+      setIsPlaying(false);
+      return;
+    }
 
-    // Check if adding this edge creates a cycle
-    // Note: We use 'find' to check without modifying, then 'union' if valid
+    const nextIndex = currentStep + 1;
+    const edgeToProcess = sortedEdges[nextIndex];
+    
+    // Determine log message
+    // We need DSU state right before this step to know if it creates a cycle
+    const dsu = new UnionFind(nodes.map(n => n.id));
+    for (let i = 0; i < nextIndex; i++) {
+       dsu.union(sortedEdges[i].source, sortedEdges[i].target);
+    }
+    
     const root1 = dsu.find(edgeToProcess.source);
     const root2 = dsu.find(edgeToProcess.target);
+    const createsCycle = root1 === root2;
 
-    if (root1 !== root2) {
-      if (mainEdgeIndex !== -1) newEdges[mainEdgeIndex].status = 'accepted';
+    let log: LogStep;
+    if (!createsCycle) {
       log = {
-        message: `${edgeToProcess.source}-${edgeToProcess.target} kenarı seçildi (Ağırlık: ${edgeToProcess.weight}). Döngü oluşturmuyor.`,
+        message: `${edgeToProcess.source}-${edgeToProcess.target} kenarı seçildi (${edgeToProcess.weight}). Döngü yok.`,
         type: 'success',
         edgeId: edgeToProcess.id
       };
-      setMstWeight(currentMstWeight + edgeToProcess.weight);
     } else {
-      if (mainEdgeIndex !== -1) newEdges[mainEdgeIndex].status = 'rejected';
       log = {
-        message: `${edgeToProcess.source}-${edgeToProcess.target} kenarı reddedildi (Ağırlık: ${edgeToProcess.weight}). Döngü oluşturuyor!`,
+        message: `${edgeToProcess.source}-${edgeToProcess.target} kenarı atlandı (${edgeToProcess.weight}). Döngü var!`,
         type: 'error',
         edgeId: edgeToProcess.id
       };
-      setMstWeight(currentMstWeight); // Weight doesn't increase
     }
 
-    setEdges(newEdges);
     setLogs(prev => [log, ...prev]);
-    setCurrentStep(nextIndex);
+    updateVisualState(nextIndex);
+  };
+
+  const prevStep = () => {
+    if (currentStep < 0) return;
+    
+    setLogs(prev => prev.slice(1));
+    updateVisualState(currentStep - 1);
+    setIsPlaying(false);
   };
 
   // Auto-play effect
@@ -200,47 +208,68 @@ const Visualizer: React.FC = () => {
       }, 1000);
     }
     return () => clearInterval(interval);
-  }, [isPlaying, currentStep, sortedEdges, edges]); 
-
-  const reset = () => {
-    setIsPlaying(false);
-    setCurrentStep(-1);
-    setLogs([]);
-    setMstWeight(0);
-    setEdges(edges.map(e => ({ ...e, status: 'default' })));
-  };
+  }, [isPlaying, currentStep, sortedEdges]); 
 
   return (
     <div className="flex flex-col lg:flex-row gap-6 h-full">
       {/* Canvas Area */}
       <div className="flex-1 bg-white rounded-xl shadow-sm border border-slate-200 p-4 flex flex-col">
-        <div className="flex justify-between items-center mb-4">
+        <div className="flex flex-wrap justify-between items-center mb-4 gap-4">
           <div className="flex gap-2">
+            <div className="flex bg-slate-100 rounded-lg p-1 mr-2">
+               <button 
+                 onClick={() => generateGraph('simple')}
+                 className={`px-3 py-1.5 text-sm rounded-md transition ${complexity === 'simple' ? 'bg-white shadow-sm text-indigo-700 font-bold' : 'text-slate-500 hover:text-slate-700'}`}
+               >
+                 Basit
+               </button>
+               <button 
+                 onClick={() => generateGraph('complex')}
+                 className={`px-3 py-1.5 text-sm rounded-md transition ${complexity === 'complex' ? 'bg-white shadow-sm text-indigo-700 font-bold' : 'text-slate-500 hover:text-slate-700'}`}
+               >
+                 Karmaşık
+               </button>
+            </div>
+            
             <button
-              onClick={generateGraph}
-              className="flex items-center gap-2 px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition"
+              onClick={() => generateGraph(complexity)}
+              className="p-2 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition"
+              title="Yeni Çizge"
             >
-              <RotateCcw size={16} /> Yeni Karmaşık Çizge
+              <RotateCcw size={20} />
             </button>
+            
+            <div className="w-px h-8 bg-slate-200 mx-1"></div>
+
+            <button
+              onClick={prevStep}
+              disabled={currentStep < 0 || isPlaying}
+              className="flex items-center gap-1 px-3 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition disabled:opacity-50"
+            >
+              <SkipBack size={18} /> <span className="hidden sm:inline">Geri</span>
+            </button>
+            
             <button
               onClick={() => setIsPlaying(!isPlaying)}
               disabled={currentStep >= sortedEdges.length - 1}
-              className={`flex items-center gap-2 px-3 py-2 rounded-lg transition ${
-                isPlaying ? 'bg-amber-500 text-white hover:bg-amber-600' : 'bg-emerald-600 text-white hover:bg-emerald-700'
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition font-medium ${
+                isPlaying ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
               } disabled:opacity-50 disabled:cursor-not-allowed`}
             >
-              {isPlaying ? 'Duraklat' : 'Oynat'} <Play size={16} />
+              {isPlaying ? <Pause size={18} /> : <Play size={18} />}
+              <span className="hidden sm:inline">{isPlaying ? 'Duraklat' : 'Oynat'}</span>
             </button>
+            
             <button
               onClick={nextStep}
               disabled={isPlaying || currentStep >= sortedEdges.length - 1}
-              className="flex items-center gap-2 px-3 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition disabled:opacity-50"
+              className="flex items-center gap-1 px-3 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition disabled:opacity-50"
             >
-              İleri <SkipForward size={16} />
+              <span className="hidden sm:inline">İleri</span> <SkipForward size={18} />
             </button>
           </div>
-          <div className="text-lg font-bold text-slate-800">
-            MST Ağırlığı: <span className="text-indigo-600">{mstWeight}</span>
+          <div className="text-lg font-bold text-slate-800 bg-slate-50 px-4 py-2 rounded-lg border border-slate-100">
+            MST: <span className="text-indigo-600 font-mono text-xl">{mstWeight}</span>
           </div>
         </div>
 
@@ -251,33 +280,36 @@ const Visualizer: React.FC = () => {
               const sourceNode = nodes.find(n => n.id === edge.source);
               const targetNode = nodes.find(n => n.id === edge.target);
               
-              // Only render if we have valid node coordinates
               if (!sourceNode || !targetNode) return null;
 
-              // Default style (black edges)
-              let strokeColor = '#000000'; 
-              let strokeWidth = 2;
+              let strokeColor = '#CBD5E1'; // Slate-300 default
+              let strokeWidth = 3;
               let strokeDasharray = "";
               let zIndex = 0;
+              let opacity = 1;
 
               if (edge.status === 'accepted') {
-                strokeColor = '#10B981'; // Vivid Green for MST
-                strokeWidth = 6; // Thicker for emphasis
+                strokeColor = '#10B981'; // Emerald-500
+                strokeWidth = 6;
                 zIndex = 10;
               } else if (edge.status === 'rejected') {
-                strokeColor = '#EF4444'; // Red
-                strokeWidth = 1;
-                strokeDasharray = "5,5"; // Dashed for rejected
+                strokeColor = '#EF4444'; // Red-500
+                strokeWidth = 2;
+                strokeDasharray = "5,5";
+                opacity = 0.4;
                 zIndex = 0;
               } else if (currentStep > -1 && sortedEdges[currentStep + 1]?.id === edge.id && isPlaying) {
-                 // Prediction/Current highlight
-                 strokeColor = '#F59E0B'; // Amber/Orange
-                 strokeWidth = 4;
+                 // Next up highlight
+                 strokeColor = '#F59E0B'; // Amber
+                 strokeWidth = 5;
                  zIndex = 5;
+              } else {
+                 // Default edges
+                 strokeColor = '#94A3B8';
               }
 
               return (
-                <g key={edge.id} style={{ zIndex }}>
+                <g key={edge.id} style={{ opacity }}>
                   <line
                     x1={sourceNode.x}
                     y1={sourceNode.y}
@@ -293,7 +325,7 @@ const Visualizer: React.FC = () => {
                   <circle 
                     cx={(sourceNode.x + targetNode.x) / 2}
                     cy={(sourceNode.y + targetNode.y) / 2}
-                    r="10"
+                    r="12"
                     fill="white"
                     stroke={strokeColor}
                     strokeWidth={edge.status === 'accepted' ? 2 : 1}
@@ -304,7 +336,7 @@ const Visualizer: React.FC = () => {
                     y={(sourceNode.y + targetNode.y) / 2}
                     textAnchor="middle"
                     dy=".3em"
-                    fontSize="10"
+                    fontSize="11"
                     fontWeight="bold"
                     fill="#1E293B"
                   >
@@ -320,14 +352,14 @@ const Visualizer: React.FC = () => {
                 <circle
                   r={NODE_RADIUS}
                   fill="white"
-                  stroke="#3B82F6"
+                  stroke="#6366F1"
                   strokeWidth="3"
                   className="shadow-md"
                 />
                 <text
                   textAnchor="middle"
                   dy=".3em"
-                  className="font-bold text-slate-700 select-none pointer-events-none"
+                  className="font-bold text-slate-700 select-none pointer-events-none text-sm"
                 >
                   {node.id}
                 </text>
@@ -340,39 +372,52 @@ const Visualizer: React.FC = () => {
       {/* Sidebar / Info Panel */}
       <div className="w-full lg:w-80 flex flex-col gap-4">
         {/* Sorted Edges List */}
-        <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 h-64 overflow-hidden flex flex-col">
-          <h3 className="font-bold text-slate-700 mb-2 pb-2 border-b">Kenar Listesi (Sıralı)</h3>
-          <div className="overflow-y-auto flex-1 pr-2 space-y-1">
+        <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 h-1/2 flex flex-col">
+          <h3 className="font-bold text-slate-700 mb-2 pb-2 border-b flex justify-between">
+             <span>Kenar Listesi</span>
+             <span className="text-xs font-normal text-slate-400 bg-slate-100 px-2 py-1 rounded">Küçükten Büyüğe</span>
+          </h3>
+          <div className="overflow-y-auto flex-1 pr-1 space-y-1">
             {sortedEdges.map((edge, index) => {
               const isProcessed = index <= currentStep;
+              const isNext = index === currentStep + 1;
               const status = edges.find(e => e.id === edge.id)?.status;
               
-              let bgClass = "bg-slate-50";
-              let textClass = "text-slate-600";
+              let bgClass = "bg-white";
+              let textClass = "text-slate-500";
+              let borderClass = "border-transparent";
               
               if (index === currentStep) {
                 // Just processed
                 if (status === 'accepted') {
-                   bgClass = "bg-emerald-100 border-l-4 border-emerald-500";
+                   bgClass = "bg-emerald-50";
                    textClass = "text-emerald-700 font-bold";
+                   borderClass = "border-emerald-500";
                 } else {
-                   bgClass = "bg-red-100 border-l-4 border-red-500";
+                   bgClass = "bg-red-50";
                    textClass = "text-red-700 font-bold";
+                   borderClass = "border-red-500";
                 }
               } else if (isProcessed) {
                  if (status === 'accepted') {
-                    bgClass = "bg-emerald-50/50 opacity-70";
-                    textClass = "text-emerald-800";
+                    bgClass = "bg-emerald-50/30";
+                    textClass = "text-emerald-600/70";
                  } else {
-                    bgClass = "bg-red-50/50 opacity-50 line-through";
-                    textClass = "text-red-800";
+                    bgClass = "bg-red-50/30";
+                    textClass = "text-red-600/50 line-through decoration-red-300";
                  }
+              } else if (isNext) {
+                 bgClass = "bg-amber-50";
+                 textClass = "text-amber-700 font-bold";
+                 borderClass = "border-amber-400";
               }
 
               return (
-                <div key={edge.id} className={`p-2 rounded text-sm flex justify-between items-center ${bgClass} ${textClass}`}>
-                  <span>{edge.source} - {edge.target}</span>
-                  <span>Ağırlık: {edge.weight}</span>
+                <div key={edge.id} className={`p-2 rounded border-l-4 text-sm flex justify-between items-center transition-all ${bgClass} ${textClass} ${borderClass}`}>
+                  <span className="font-mono">{edge.source} <span className="text-xs opacity-50">---</span> {edge.target}</span>
+                  <span className={`px-2 py-0.5 rounded text-xs ${isNext ? 'bg-amber-200 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>
+                    {edge.weight}
+                  </span>
                 </div>
               );
             })}
@@ -380,16 +425,17 @@ const Visualizer: React.FC = () => {
         </div>
 
         {/* Logs */}
-        <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 h-64 overflow-hidden flex flex-col">
-          <h3 className="font-bold text-slate-700 mb-2 pb-2 border-b">İşlem Günlüğü</h3>
-          <div className="overflow-y-auto flex-1 space-y-2">
-            {logs.length === 0 && <p className="text-slate-400 text-sm italic">Henüz işlem yapılmadı.</p>}
+        <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 h-1/2 flex flex-col">
+          <h3 className="font-bold text-slate-700 mb-2 pb-2 border-b">Analiz Günlüğü</h3>
+          <div className="overflow-y-auto flex-1 space-y-2 pr-1">
+            {logs.length === 0 && <div className="text-slate-400 text-sm text-center py-8">Başlamak için 'İleri' veya 'Oynat' butonuna basın.</div>}
             {logs.map((log, i) => (
-              <div key={i} className={`text-sm p-2 rounded ${
-                log.type === 'success' ? 'bg-emerald-50 text-emerald-800' : 
-                log.type === 'error' ? 'bg-red-50 text-red-800' : 'bg-slate-50 text-slate-700'
+              <div key={i} className={`text-sm p-3 rounded-lg border flex gap-2 animate-fade-in ${
+                log.type === 'success' ? 'bg-emerald-50 text-emerald-800 border-emerald-100' : 
+                log.type === 'error' ? 'bg-red-50 text-red-800 border-red-100' : 'bg-slate-50 text-slate-700 border-slate-100'
               }`}>
-                {log.message}
+                <div className={`mt-0.5 w-2 h-2 rounded-full flex-shrink-0 ${log.type === 'success' ? 'bg-emerald-500' : 'bg-red-500'}`}></div>
+                <span>{log.message}</span>
               </div>
             ))}
           </div>

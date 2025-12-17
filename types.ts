@@ -24,4 +24,4 @@ export interface LogStep {
   type: 'info' | 'success' | 'error' | 'warning';
 }
 
-export type ViewState = 'home' | 'visualizer' | 'pseudocode' | 'code' | 'complexity' | 'practice';
+export type ViewState = 'home' | 'visualizer' | 'pseudocode' | 'code' | 'complexity' | 'practice' | 'quiz';
